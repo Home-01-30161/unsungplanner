@@ -1,0 +1,36 @@
+{
+    "_note": "ESTIMATES in THB per person. Tune these yourself; live API prices always win over these.",
+    "daily": {
+        "food": {
+            "Backpacker": 300,
+            "Mid-range": 800,
+            "Luxury": 2000
+        },
+        "localTransport": {
+            "Backpacker": 150,
+            "Mid-range": 400,
+            "Luxury": 1200
+        },
+        "activities": {
+            "Backpacker": 200,
+            "Mid-range": 600,
+            "Luxury": 1800
+        }
+    },
+    "rentals": {
+        "carPerDay": 900
+    },
+    "driving": {
+        "kmPerLiter": 14,
+        "defaultFuelPricePerLiter": 38
+    },
+    "train": {
+        "_note": "UNVERIFIED fares per direction, one adult. Confirm on the SRT booking site before relying on them.",
+        "routes": {
+            "bangkok|chiang-mai": {
+                "second_class_ac_sleeper": 1041,
+                "first_class_cabin": 1950
+            }
+        }
+    }
+}
