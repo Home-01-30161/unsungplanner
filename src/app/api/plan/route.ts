@@ -1,19 +1,19 @@
 import { travelWorkflow } from "@/lib/agents/travelGraph";
 import { PlanRequest } from "@/lib/schema";
 import { takeDailyPlanSlot } from "@/lib/cache";
-import { todayInBangkok } from "@/lib/dates";
+import { todayUTC } from "@/lib/dates";
 
 export const maxDuration = 60; // seconds; plenty on Vercel Hobby with Fluid Compute
 
 const DAILY_LIMIT = Number(process.env.DAILY_PLAN_LIMIT ?? 4);
-const KEYS_TO_SEND = ["gaps", "calendarWarnings", "budget", "itinerary"] as const;
+const KEYS_TO_SEND = ["gaps", "calendarWarnings", "budget", "itinerary", "researchSources"] as const;
 
 export async function POST(req: Request) {
     const parsed = PlanRequest.safeParse(await req.json().catch(() => null));
     if (!parsed.success) {
         return Response.json({ error: parsed.error.issues.map((i) => i.message).join("; ") }, { status: 400 });
     }
-    if (!(await takeDailyPlanSlot(DAILY_LIMIT, todayInBangkok()))) {
+    if (!(await takeDailyPlanSlot(DAILY_LIMIT, todayUTC()))) {
         return Response.json({ error: "Daily planning limit reached. Try again tomorrow." }, { status: 429 });
     }
 

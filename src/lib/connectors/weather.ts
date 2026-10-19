@@ -1,19 +1,21 @@
-import { addDays, daysBetween, todayInBangkok } from "../dates";
-import type { Destination, WeatherSummary } from "../types";
+import { addDays, daysBetween, todayUTC } from "../dates";
+import type { CityInfo, WeatherSummary } from "../types";
 
 const FORECAST_LIMIT_DAYS = 15; // Open-Meteo forecasts reach ~16 days ahead
 
 /** Real forecast when the trip is within range, otherwise null. */
-export async function getForecast(dest: Destination, startDate: string, endDate: string): Promise<WeatherSummary | null> {
-    const today = todayInBangkok();
+export async function getForecast(dest: CityInfo, startDate: string, endDate: string): Promise<WeatherSummary | null> {
+    const today = todayUTC();
     if (daysBetween(today, startDate) > FORECAST_LIMIT_DAYS || endDate < today) return null;
 
     const start = startDate < today ? today : startDate;
     const end = daysBetween(today, endDate) > FORECAST_LIMIT_DAYS ? addDays(today, FORECAST_LIMIT_DAYS) : endDate;
 
+    // Use the city's own timezone for the weather API
+    const tz = dest.timezone ? encodeURIComponent(dest.timezone) : "UTC";
     const url =
         `https://api.open-meteo.com/v1/forecast?latitude=${dest.lat}&longitude=${dest.lng}` +
-        `&daily=temperature_2m_max,precipitation_probability_max&timezone=Asia%2FBangkok&start_date=${start}&end_date=${end}`;
+        `&daily=temperature_2m_max,precipitation_probability_max&timezone=${tz}&start_date=${start}&end_date=${end}`;
     try {
         const res = await fetch(url);
         if (!res.ok) return null;
@@ -33,16 +35,16 @@ export async function getForecast(dest: Destination, startDate: string, endDate:
     }
 }
 
-/** Typical-season note for when no forecast exists yet. General climate pattern, not a forecast. */
-export function seasonNote(region: Destination["region"], startDate: string): string {
+/** Generic climate note for when no forecast is available yet. */
+export function seasonNote(lat: number, startDate: string): string {
     const month = Number(startDate.slice(5, 7));
-    const hot = month >= 3 && month <= 5;
-    const gulfWet = month >= 10 || month <= 1; // Gulf coast peaks Oct to Dec
-    const wet = region === "gulf" ? gulfWet : month >= 5 && month <= 10;
+    const northernHemisphere = lat >= 0;
 
-    if (wet) return "Typically the rainy season here: expect showers, and some boat trips may be cancelled.";
-    if (hot) return "Typically the hot season: very high daytime temperatures, so plan outdoor activity early or late.";
-    return region === "north"
-        ? "Typically the dry, cooler season: pleasant days, chilly mornings in the hills."
-        : "Typically the dry season: the most comfortable weather of the year.";
+    // Map month to season in the relevant hemisphere
+    const summerMonths = northernHemisphere ? [6, 7, 8] : [12, 1, 2];
+    const winterMonths = northernHemisphere ? [12, 1, 2] : [6, 7, 8];
+
+    if (summerMonths.includes(month)) return "Typically summer: warm to hot; check local weather forecasts.";
+    if (winterMonths.includes(month)) return "Typically winter: cooler temperatures; pack layers.";
+    return "Shoulder season: generally pleasant but variable; check local forecasts closer to your trip.";
 }

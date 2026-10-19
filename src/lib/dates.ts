@@ -18,7 +18,7 @@ export function eachDate(startIso: string, endIso: string): string[] {
     return out;
 }
 
-/** Today's date in Thailand (Asia/Bangkok), not the server's time zone. */
-export function todayInBangkok(): string {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Bangkok" }).format(new Date());
+/** Today's date in UTC. */
+export function todayUTC(): string {
+    return new Date().toISOString().slice(0, 10);
 }
