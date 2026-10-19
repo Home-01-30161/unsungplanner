@@ -95,7 +95,7 @@ export function buildBudget(i: BudgetInput): Budget {
         source: "live",
         url: i.hotel?.searchUrl,
         note: i.hotel
-            ? `Median of ${i.hotel.sampleSize} listings, $${i.hotel.medianNightUSD}/night (e.g. ${i.hotel.sampleName})`
+            ? `Cheapest of ${i.hotel.sampleSize} listings, from $${i.hotel.medianNightUSD}/night (e.g. ${i.hotel.sampleName})`
             : "No live hotel rates found."
     });
     lines.push({ id: "food",   label: "Food",                 amountUSD: daily.food          * days, source: "estimate", note: `~$${daily.food}/day (rough global estimate)` });

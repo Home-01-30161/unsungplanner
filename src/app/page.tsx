@@ -1,10 +1,190 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Compass, Loader2, AlertTriangle, CheckCircle2, Circle, ExternalLink, ChevronDown, ChevronUp } from 'lucide-react';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { Compass, Loader2, AlertTriangle, CheckCircle2, Circle, ExternalLink, ChevronDown, ChevronUp, MapPin, X } from 'lucide-react';
 import { BUDGET_STYLES, DISPLAY_CURRENCIES, type Budget, type ResearchSource } from '@/lib/types';
 
-/** Renders a structured bullet-point itinerary with clickable [N] citation links. */
+// ─── Types ────────────────────────────────────────────────────────────────────
+
+type CityCandidate = {
+  name: string;
+  admin1: string | null;
+  country: string;
+  countryCode: string;
+  lat: number;
+  lng: number;
+  timezone: string;
+  population: number | null;
+  label: string;
+};
+
+type PinnedCity = {
+  name: string;
+  country: string;
+  countryCode: string;
+  lat: number;
+  lng: number;
+  timezone: string;
+};
+
+// ─── CityPicker ───────────────────────────────────────────────────────────────
+
+/**
+ * A city + country pair input that fetches candidates from /api/cities and
+ * shows a disambiguation dropdown when there are multiple matches.
+ * Once the user selects a candidate, it's "pinned" and shown as a badge.
+ */
+function CityPicker({
+  idPrefix,
+  cityLabel,
+  cityPlaceholder,
+  countryPlaceholder,
+  city,
+  country,
+  pin,
+  onCityChange,
+  onCountryChange,
+  onPin,
+  onClearPin,
+}: {
+  idPrefix: string;
+  cityLabel: string;
+  cityPlaceholder: string;
+  countryPlaceholder: string;
+  city: string;
+  country: string;
+  pin: PinnedCity | null;
+  onCityChange: (v: string) => void;
+  onCountryChange: (v: string) => void;
+  onPin: (c: PinnedCity) => void;
+  onClearPin: () => void;
+}) {
+  const [candidates, setCandidates] = useState<CityCandidate[]>([]);
+  const [fetching, setFetching] = useState(false);
+  const [open, setOpen] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const wrapperRef = useRef<HTMLDivElement>(null);
+
+  const field =
+    'w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm focus:outline-none focus:border-emerald-500';
+
+  // Fetch candidates whenever city or country changes (debounced 500ms)
+  const fetchCandidates = useCallback((c: string, ctry: string) => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (c.trim().length < 2) { setCandidates([]); setOpen(false); return; }
+    debounceRef.current = setTimeout(async () => {
+      setFetching(true);
+      try {
+        const r = await fetch(`/api/cities?city=${encodeURIComponent(c)}&country=${encodeURIComponent(ctry)}`);
+        const data: CityCandidate[] = await r.json();
+        setCandidates(data);
+        // Auto-open if more than 1 result OR the top result doesn't exactly match the typed city
+        if (data.length > 0) setOpen(true);
+      } catch { /* ignore */ } finally { setFetching(false); }
+    }, 500);
+  }, []);
+
+  // Close dropdown on outside click
+  useEffect(() => {
+    function handle(e: MouseEvent) {
+      if (wrapperRef.current && !wrapperRef.current.contains(e.target as Node)) setOpen(false);
+    }
+    document.addEventListener('mousedown', handle);
+    return () => document.removeEventListener('mousedown', handle);
+  }, []);
+
+  function handleSelect(c: CityCandidate) {
+    onPin({ name: c.name, country: c.country, countryCode: c.countryCode, lat: c.lat, lng: c.lng, timezone: c.timezone });
+    onCityChange(c.name);
+    onCountryChange(c.country);
+    setOpen(false);
+    setCandidates([]);
+  }
+
+  function handleCityInput(v: string) {
+    onCityChange(v);
+    onClearPin();
+    fetchCandidates(v, country);
+  }
+
+  function handleCountryInput(v: string) {
+    onCountryChange(v);
+    onClearPin();
+    fetchCandidates(city, v);
+  }
+
+  return (
+    <div ref={wrapperRef} className="contents">
+      {/* City field */}
+      <div className="space-y-1 relative">
+        <span className="text-xs font-semibold text-slate-300">{cityLabel} — city</span>
+        {pin ? (
+          /* Pinned badge */
+          <div className="flex items-center gap-2 bg-emerald-950/60 border border-emerald-700/60 rounded-lg px-3 py-2.5 text-sm">
+            <MapPin className="h-3.5 w-3.5 text-emerald-400 shrink-0" />
+            <span className="font-medium text-emerald-300 truncate">{pin.name}</span>
+            <button type="button" onClick={onClearPin} className="ml-auto text-slate-500 hover:text-slate-300 transition">
+              <X className="h-3.5 w-3.5" />
+            </button>
+          </div>
+        ) : (
+          <input
+            id={`${idPrefix}-city`}
+            className={field + (fetching ? ' pr-8' : '')}
+            placeholder={cityPlaceholder}
+            value={city}
+            onChange={(e) => handleCityInput(e.target.value)}
+            onFocus={() => { if (candidates.length > 0) setOpen(true); }}
+            autoComplete="off"
+            required
+          />
+        )}
+
+        {/* Dropdown */}
+        {open && candidates.length > 0 && !pin && (
+          <ul className="absolute z-50 top-full left-0 right-0 mt-1 bg-slate-900 border border-slate-700 rounded-xl shadow-2xl overflow-hidden">
+            {candidates.map((c, i) => (
+              <li key={i}>
+                <button
+                  type="button"
+                  onClick={() => handleSelect(c)}
+                  className="w-full text-left px-4 py-3 hover:bg-slate-800 transition flex items-start gap-3"
+                >
+                  <MapPin className="h-4 w-4 text-emerald-400 shrink-0 mt-0.5" />
+                  <div>
+                    <div className="text-sm font-medium text-slate-100">{c.label}</div>
+                    {c.population != null && (
+                      <div className="text-xs text-slate-500">
+                        pop. {c.population.toLocaleString()}
+                      </div>
+                    )}
+                  </div>
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Country field */}
+      <div className="space-y-1">
+        <span className="text-xs font-semibold text-slate-300">{cityLabel} — country</span>
+        <input
+          id={`${idPrefix}-country`}
+          className={field}
+          placeholder={countryPlaceholder}
+          value={country}
+          onChange={(e) => handleCountryInput(e.target.value)}
+          autoComplete="off"
+          required
+        />
+      </div>
+    </div>
+  );
+}
+
+// ─── Itinerary renderer ───────────────────────────────────────────────────────
+
 function ItineraryRenderer({ text, sources }: { text: string; sources: ResearchSource[] }) {
   const lines = text.split('\n');
   return (
@@ -12,58 +192,35 @@ function ItineraryRenderer({ text, sources }: { text: string; sources: ResearchS
       {lines.map((line, i) => {
         const trimmed = line.trim();
         if (!trimmed) return null;
-
-        // Day heading: "Day 1 — ..."
         if (/^Day\s+\d+/i.test(trimmed)) {
-          return (
-            <h3 key={i} className="text-emerald-400 font-bold text-base mt-6 first:mt-0">
-              {trimmed}
-            </h3>
-          );
+          return <h3 key={i} className="text-emerald-400 font-bold text-base mt-6 first:mt-0">{trimmed}</h3>;
         }
-        // Sub-heading: Morning / Afternoon / Evening
         if (/^(Morning|Afternoon|Evening)$/i.test(trimmed)) {
-          return (
-            <p key={i} className="text-slate-400 font-semibold text-xs uppercase tracking-widest mt-3">
-              {trimmed}
-            </p>
-          );
+          return <p key={i} className="text-slate-400 font-semibold text-xs uppercase tracking-widest mt-3">{trimmed}</p>;
         }
-        // Bullet line: starts with "-"
         if (trimmed.startsWith('-')) {
-          const content = trimmed.slice(1).trim();
           return (
             <div key={i} className="flex gap-2 text-slate-300 leading-snug">
               <span className="text-emerald-500 mt-0.5 shrink-0">•</span>
-              <span>{renderWithCitations(content, sources)}</span>
+              <span>{renderWithCitations(trimmed.slice(1).trim(), sources)}</span>
             </div>
           );
         }
-        // Fallback: plain text
         return <p key={i} className="text-slate-400 text-xs">{trimmed}</p>;
       })}
     </div>
   );
 }
 
-/** Splits a text string on [N] tokens and returns a mix of text and link nodes. */
 function renderWithCitations(text: string, sources: ResearchSource[]) {
-  const parts = text.split(/(\[\d+\])/);
-  return parts.map((part, i) => {
+  return text.split(/(\[\d+\])/).map((part, i) => {
     const match = part.match(/^\[(\d+)\]$/);
     if (match) {
-      const idx = Number(match[1]) - 1;
-      const src = sources[idx];
+      const src = sources[Number(match[1]) - 1];
       if (src) {
         return (
-          <a
-            key={i}
-            href={src.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            title={src.title}
-            className="inline-flex items-center gap-0.5 text-emerald-400 hover:text-emerald-300 text-xs font-semibold align-super leading-none transition"
-          >
+          <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" title={src.title}
+            className="inline-flex items-center gap-0.5 text-emerald-400 hover:text-emerald-300 text-xs font-semibold align-super leading-none transition">
             [{match[1]}]
           </a>
         );
@@ -73,13 +230,15 @@ function renderWithCitations(text: string, sources: ResearchSource[]) {
   });
 }
 
+// ─── Page ─────────────────────────────────────────────────────────────────────
+
 const STEPS = [
   { node: 'geocode_cities',  label: 'Locating cities' },
   { node: 'find_logistics',  label: 'Flights, hotels & routes' },
   { node: 'find_research',   label: 'Web research' },
   { node: 'find_weather',    label: 'Weather & holidays' },
   { node: 'calc_budget',     label: 'Budget calculation' },
-  { node: 'write_itinerary', label: 'Writing itinerary' }
+  { node: 'write_itinerary', label: 'Writing itinerary' },
 ];
 
 type Result = {
@@ -90,20 +249,19 @@ type Result = {
   sources: ResearchSource[];
 };
 
-const field =
-  'w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm focus:outline-none focus:border-emerald-500';
-
 export default function Home() {
   const [originCity,    setOriginCity]    = useState('');
   const [originCountry, setOriginCountry] = useState('');
+  const [originPin,     setOriginPin]     = useState<PinnedCity | null>(null);
   const [destCity,      setDestCity]      = useState('');
   const [destCountry,   setDestCountry]   = useState('');
-  const [startDate, setStartDate] = useState('');
-  const [minDate,   setMinDate]   = useState('');
-  const [nights,    setNights]    = useState('4');
-  const [style,     setStyle]     = useState('Mid-range');
-  const [mode,      setMode]      = useState('fly');
-  const [currency,  setCurrency]  = useState('USD');
+  const [destPin,       setDestPin]       = useState<PinnedCity | null>(null);
+  const [startDate,  setStartDate]  = useState('');
+  const [minDate,    setMinDate]    = useState('');
+  const [nights,     setNights]     = useState('4');
+  const [style,      setStyle]      = useState('Mid-range');
+  const [mode,       setMode]       = useState('fly');
+  const [currency,   setCurrency]   = useState('USD');
   const [sourcesOpen, setSourcesOpen] = useState(false);
 
   const [loading, setLoading] = useState(false);
@@ -128,7 +286,7 @@ export default function Home() {
         budget:    (data.budget    as Budget | undefined) ?? r.budget,
         itinerary: (data.itinerary as string | undefined) ?? r.itinerary,
         warnings:  (data.calendarWarnings as string[] | undefined) ?? r.warnings,
-        gaps:      [...r.gaps,    ...((data.gaps            as string[]        | undefined) ?? [])],
+        gaps:      [...r.gaps,    ...((data.gaps            as string[]         | undefined) ?? [])],
         sources:   [...r.sources, ...((data.researchSources as ResearchSource[] | undefined) ?? [])],
       };
     });
@@ -138,17 +296,21 @@ export default function Home() {
     e.preventDefault();
     setLoading(true); setError(null); setResult(null); setDone([]); setSourcesOpen(false);
     try {
+      const body: Record<string, unknown> = {
+        originCity, originCountry, destCity, destCountry,
+        startDate, nights: Number(nights), style, mode, displayCurrency: currency,
+      };
+      if (originPin) body.originPin = originPin;
+      if (destPin)   body.destPin   = destPin;
+
       const res = await fetch('/api/plan', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          originCity, originCountry, destCity, destCountry,
-          startDate, nights: Number(nights), style, mode, displayCurrency: currency
-        })
+        body: JSON.stringify(body),
       });
       if (!res.ok || !res.body) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error ?? `Request failed (${res.status})`);
+        const b = await res.json().catch(() => ({}));
+        throw new Error((b as { error?: string }).error ?? `Request failed (${res.status})`);
       }
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
@@ -175,6 +337,8 @@ export default function Home() {
 
   const canSubmit = !loading && !!startDate && !!originCity && !!originCountry && !!destCity && !!destCountry;
 
+  const fieldCls = 'w-full bg-slate-950 border border-slate-700 rounded-lg p-2.5 text-sm focus:outline-none focus:border-emerald-500';
+
   return (
     <main className="min-h-screen bg-slate-950 text-slate-100 p-6 md:p-12">
       <div className="max-w-4xl mx-auto space-y-8">
@@ -190,55 +354,61 @@ export default function Home() {
 
         <form onSubmit={handleSubmit} className="bg-slate-900 border border-slate-800 rounded-2xl p-6 grid grid-cols-1 md:grid-cols-2 gap-4">
 
-          {/* Origin */}
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-300">From — city</span>
-            <input id="origin-city" className={field} placeholder="e.g. Bangkok" value={originCity}
-              onChange={(e) => setOriginCity(e.target.value)} required />
-          </div>
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-300">From — country</span>
-            <input id="origin-country" className={field} placeholder="e.g. Thailand" value={originCountry}
-              onChange={(e) => setOriginCountry(e.target.value)} required />
-          </div>
+          {/* Origin CityPicker */}
+          <CityPicker
+            idPrefix="origin"
+            cityLabel="From"
+            cityPlaceholder="e.g. Bangkok"
+            countryPlaceholder="e.g. Thailand"
+            city={originCity}
+            country={originCountry}
+            pin={originPin}
+            onCityChange={setOriginCity}
+            onCountryChange={setOriginCountry}
+            onPin={setOriginPin}
+            onClearPin={() => setOriginPin(null)}
+          />
 
-          {/* Destination */}
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-300">To — city</span>
-            <input id="dest-city" className={field} placeholder="e.g. Tokyo" value={destCity}
-              onChange={(e) => setDestCity(e.target.value)} required />
-          </div>
-          <div className="space-y-1">
-            <span className="text-xs font-semibold text-slate-300">To — country</span>
-            <input id="dest-country" className={field} placeholder="e.g. Japan" value={destCountry}
-              onChange={(e) => setDestCountry(e.target.value)} required />
-          </div>
+          {/* Destination CityPicker */}
+          <CityPicker
+            idPrefix="dest"
+            cityLabel="To"
+            cityPlaceholder="e.g. Tokyo"
+            countryPlaceholder="e.g. Japan"
+            city={destCity}
+            country={destCountry}
+            pin={destPin}
+            onCityChange={setDestCity}
+            onCountryChange={setDestCountry}
+            onPin={setDestPin}
+            onClearPin={() => setDestPin(null)}
+          />
 
           {/* Dates */}
           <label className="text-xs font-semibold text-slate-300">Start date
-            <input id="start-date" type="date" className={field + ' mt-1'} value={startDate} min={minDate}
+            <input id="start-date" type="date" className={fieldCls + ' mt-1'} value={startDate} min={minDate}
               onChange={(e) => setStartDate(e.target.value)} required />
           </label>
           <label className="text-xs font-semibold text-slate-300">Nights (1–14)
-            <input id="nights" type="number" min={1} max={14} className={field + ' mt-1'} value={nights}
+            <input id="nights" type="number" min={1} max={14} className={fieldCls + ' mt-1'} value={nights}
               onChange={(e) => setNights(e.target.value)} required />
           </label>
 
           {/* Options */}
           <label className="text-xs font-semibold text-slate-300">Budget level
-            <select id="budget-style" className={field + ' mt-1'} value={style} onChange={(e) => setStyle(e.target.value)}>
+            <select id="budget-style" className={fieldCls + ' mt-1'} value={style} onChange={(e) => setStyle(e.target.value)}>
               {BUDGET_STYLES.map((s) => <option key={s}>{s}</option>)}
             </select>
           </label>
           <label className="text-xs font-semibold text-slate-300">Getting there
-            <select id="transport-mode" className={field + ' mt-1'} value={mode} onChange={(e) => setMode(e.target.value)}>
+            <select id="transport-mode" className={fieldCls + ' mt-1'} value={mode} onChange={(e) => setMode(e.target.value)}>
               <option value="fly">Fly</option>
               <option value="drive">Drive (rental car)</option>
               <option value="train">Train</option>
             </select>
           </label>
           <label className="text-xs font-semibold text-slate-300 md:col-span-2">Show amounts in
-            <select id="display-currency" className={field + ' mt-1'} value={currency} onChange={(e) => setCurrency(e.target.value)}>
+            <select id="display-currency" className={fieldCls + ' mt-1'} value={currency} onChange={(e) => setCurrency(e.target.value)}>
               {DISPLAY_CURRENCIES.map((c) => <option key={c}>{c}</option>)}
             </select>
           </label>
@@ -271,7 +441,7 @@ export default function Home() {
 
         {result?.warnings.map((w) => (
           <div key={w} className="p-4 bg-amber-950/60 border border-amber-800/80 rounded-xl flex gap-3 text-amber-200 text-sm">
-            <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0" /> <p>{w}</p>
+            <AlertTriangle className="h-5 w-5 text-amber-400 shrink-0" /><p>{w}</p>
           </div>
         ))}
 
@@ -342,12 +512,8 @@ export default function Home() {
               <ul className="divide-y divide-slate-800 px-4 pb-4">
                 {result.sources.map((src, i) => (
                   <li key={i} className="py-3 space-y-1">
-                    <a
-                      href={src.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="flex items-start gap-1.5 text-emerald-400 hover:text-emerald-300 text-sm font-medium leading-snug transition"
-                    >
+                    <a href={src.url} target="_blank" rel="noopener noreferrer"
+                      className="flex items-start gap-1.5 text-emerald-400 hover:text-emerald-300 text-sm font-medium leading-snug transition">
                       <ExternalLink className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                       {src.title}
                     </a>

@@ -1,4 +1,5 @@
 import { cached } from "../cache";
+import { searchCitiesLocal } from "./citySearch";
 // Pre-built dataset from OurAirports (large + medium airports with scheduled service).
 // Generated via scripts/fetch-airports.mjs — 3,244 airports worldwide, no API key needed.
 // Format: [iata, lat, lng][]
@@ -162,16 +163,72 @@ const CITY_AIRPORTS: Record<string, string[]> = {
 };
 
 /**
+ * Prefecture / region → canonical city aliases.
+ * When a user types a prefecture or region name instead of a city, we silently
+ * resolve it to the region's main city before geocoding. This prevents
+ * Open-Meteo returning a tiny village that shares a name with the region.
+ */
+const REGION_TO_CITY: Record<string, string> = {
+    // Japan — all 47 prefectures mapped to their capital/main city
+    "aichi": "Nagoya", "akita": "Akita", "aomori": "Aomori",
+    "chiba": "Chiba", "ehime": "Matsuyama", "fukui": "Fukui",
+    "fukuoka": "Fukuoka", "fukushima": "Fukushima", "gifu": "Gifu",
+    "gunma": "Maebashi", "hiroshima": "Hiroshima", "hokkaido": "Sapporo",
+    "hyogo": "Kobe", "ibaraki": "Mito", "ishikawa": "Kanazawa",
+    "iwate": "Morioka", "kagawa": "Takamatsu", "kagoshima": "Kagoshima",
+    "kanagawa": "Yokohama", "kochi": "Kochi", "kumamoto": "Kumamoto",
+    "kyoto": "Kyoto", "mie": "Tsu", "miyagi": "Sendai",
+    "miyazaki": "Miyazaki", "nagano": "Nagano", "nagasaki": "Nagasaki",
+    "nara": "Nara", "niigata": "Niigata", "oita": "Oita",
+    "okayama": "Okayama", "okinawa": "Naha", "osaka": "Osaka",
+    "saga": "Saga", "saitama": "Saitama", "shiga": "Otsu",
+    "shimane": "Matsue", "shizuoka": "Shizuoka", "tochigi": "Utsunomiya",
+    "tokushima": "Tokushima", "tokyo": "Tokyo", "tottori": "Tottori",
+    "toyama": "Toyama", "wakayama": "Wakayama", "yamagata": "Yamagata",
+    "yamaguchi": "Yamaguchi", "yamanashi": "Kofu",
+    // Common US state → capital/main city
+    "california": "Los Angeles", "new york state": "New York",
+    "texas": "Houston", "florida": "Miami", "illinois": "Chicago",
+    "washington state": "Seattle", "colorado": "Denver",
+    // Common UK regions
+    "scotland": "Edinburgh", "wales": "Cardiff", "northern ireland": "Belfast",
+    // Common Australian states
+    "new south wales": "Sydney", "victoria": "Melbourne",
+    "queensland": "Brisbane", "western australia": "Perth",
+};
+
+/**
  * Resolves a city name + country name/code to a CityInfo.
  * Geocoding: Open-Meteo (free, no key required).
  * Airport codes: bundled city table → haversine scan of OurAirports JSON (3,244 airports, no key).
  */
 export async function resolveCity(city: string, country: string): Promise<CityInfo | null> {
-    const cacheKey = `geocode_v5:${city.toLowerCase()}:${country.toLowerCase()}`;
+    // Transparently remap prefecture/region names to their main city
+    const cityAlias = REGION_TO_CITY[city.trim().toLowerCase()];
+    const effectiveCity = cityAlias ?? city;
+    // Store the original user city for display purposes (used by hotel search via dest.name)
+    const cacheKey = `geocode_v7:${city.toLowerCase()}:${country.toLowerCase()}`;
     return cached<CityInfo>(cacheKey, 30 * 86_400, async () => {
-        // 1. Geocode via Open-Meteo
+        // 1. Primary: Curated SimpleMaps dataset (50k verified cities, instant, zero noise)
+        const localMatches = searchCitiesLocal(effectiveCity, country, 1);
+        if (localMatches.length > 0) {
+            const best = localMatches[0];
+            const cityKey = best.name.trim().toLowerCase();
+            const airports = CITY_AIRPORTS[cityKey] ?? nearestFromDb(best.lat, best.lng);
+            return {
+                name: best.name,
+                country: best.country,
+                countryCode: best.countryCode,
+                lat: best.lat,
+                lng: best.lng,
+                timezone: best.timezone,
+                airports,
+            };
+        }
+
+        // 2. Fallback: Geocode via Open-Meteo for tiny villages
         const geoUrl =
-            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(city)}` +
+            `https://geocoding-api.open-meteo.com/v1/search?name=${encodeURIComponent(effectiveCity)}` +
             `&count=10&language=en&format=json`;
         let geoData: { results?: GeoResult[] } | null = null;
         try {
@@ -182,21 +239,27 @@ export async function resolveCity(city: string, country: string): Promise<CityIn
         if (!geoData?.results?.length) return null;
 
         // Pick best match:
-        //  1. Prefer results whose country name or ISO code matches user input
-        //  2. Break ties by population (biggest city wins — prevents e.g. a tiny
-        //     Malaysian "Tokyo" beating the real Tokyo, Japan)
-        //  3. Final tiebreaker: preserve Open-Meteo's own relevance order
+        //  1. Country match (ISO code or name)
+        //  2. Admin1 region contains the search term (e.g. "Aichi Prefecture" for query "Aichi")
+        //     — strongly signals this is the right administrative area
+        //  3. Population (biggest city wins)
+        //  4. Original Open-Meteo relevance order
         const q = country.trim().toLowerCase();
+        const cityQ = effectiveCity.trim().toLowerCase();
         const ranked = geoData.results
             .map((r, idx) => ({
                 r,
                 idx,
                 countryMatch:
                     r.country_code.toLowerCase() === q || r.country.toLowerCase() === q ? 1 : 0,
+                adminMatch:
+                    (r.admin1?.toLowerCase().includes(cityQ) ||
+                     r.admin1?.toLowerCase() === cityQ) ? 1 : 0,
                 pop: r.population ?? 0,
             }))
             .sort((a, b) =>
                 b.countryMatch - a.countryMatch ||
+                b.adminMatch  - a.adminMatch   ||
                 b.pop - a.pop ||
                 a.idx - b.idx
             );
@@ -205,7 +268,8 @@ export async function resolveCity(city: string, country: string): Promise<CityIn
         const cc = best.country_code.toUpperCase();
 
         // 2. Airports — fast-path table first, then haversine scan of bundled OurAirports data
-        const cityKey = city.trim().toLowerCase();
+        // Use effectiveCity (alias-resolved) for the fast-path lookup
+        const cityKey = effectiveCity.trim().toLowerCase();
         const airports =
             CITY_AIRPORTS[cityKey] ??
             nearestFromDb(best.latitude, best.longitude);
@@ -236,6 +300,31 @@ function nearestFromDb(lat: number, lng: number): string[] {
         .map((a) => a.iata);
 }
 
+/**
+ * Builds a CityInfo from a user-confirmed pin (from the disambiguation picker).
+ * Skips Open-Meteo entirely — the user has already chosen the exact location.
+ */
+export function resolveCityFromPin(pin: {
+    name: string;
+    country: string;
+    countryCode: string;
+    lat: number;
+    lng: number;
+    timezone: string;
+}): CityInfo {
+    const cityKey = pin.name.trim().toLowerCase();
+    const airports = CITY_AIRPORTS[cityKey] ?? nearestFromDb(pin.lat, pin.lng);
+    return {
+        name:        pin.name,
+        country:     pin.country,
+        countryCode: pin.countryCode,
+        lat:         pin.lat,
+        lng:         pin.lng,
+        timezone:    pin.timezone,
+        airports,
+    };
+}
+
 function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
     const R = 6371;
     const dLat = toRad(lat2 - lat1);
@@ -247,3 +336,4 @@ function haversineKm(lat1: number, lon1: number, lat2: number, lon2: number): nu
 }
 
 function toRad(d: number) { return (d * Math.PI) / 180; }
+

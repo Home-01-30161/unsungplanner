@@ -2,7 +2,7 @@ import { Annotation, StateGraph, START, END } from "@langchain/langgraph";
 import { ChatOpenAI } from "@langchain/openai";
 import { addDays } from "../dates";
 import { checkTripCalendar, type HolidayEvent } from "../connectors/holidays";
-import { resolveCity, type CityInfo } from "../connectors/geocode";
+import { resolveCity, resolveCityFromPin, type CityInfo } from "../connectors/geocode";
 import { searchFlights, searchHotels } from "../connectors/travelData";
 import { researchDestination, researchFuelPrice, type DestinationResearch, type ResearchSource } from "../connectors/research";
 import { getForecast, seasonNote } from "../connectors/weather";
@@ -17,10 +17,13 @@ import {
 /** Shared state. Parallel nodes write to different keys; `gaps` uses a reducer so they can all append safely. */
 export const TravelState = Annotation.Root({
     // inputs (validated in the route handler)
-    originCity: Annotation<string>(),
+    originCity:    Annotation<string>(),
     originCountry: Annotation<string>(),
-    destCity: Annotation<string>(),
-    destCountry: Annotation<string>(),
+    destCity:      Annotation<string>(),
+    destCountry:   Annotation<string>(),
+    // Optional pinned coordinates from the disambiguation picker
+    originPin: Annotation<{ name: string; country: string; countryCode: string; lat: number; lng: number; timezone: string } | undefined>(),
+    destPin:   Annotation<{ name: string; country: string; countryCode: string; lat: number; lng: number; timezone: string } | undefined>(),
     startDate: Annotation<string>(),
     nights: Annotation<number>(),
     style: Annotation<BudgetStyle>(),
@@ -57,8 +60,13 @@ const llm = new ChatOpenAI({
 /** Node 0: geocode both cities. Runs before the parallel nodes. */
 async function geocode(s: S) {
     const [origin, destination] = await Promise.all([
-        resolveCity(s.originCity, s.originCountry),
-        resolveCity(s.destCity, s.destCountry)
+        // If the user confirmed a pin from the picker, use it directly — no geocoding needed
+        s.originPin
+            ? Promise.resolve(resolveCityFromPin(s.originPin))
+            : resolveCity(s.originCity, s.originCountry),
+        s.destPin
+            ? Promise.resolve(resolveCityFromPin(s.destPin))
+            : resolveCity(s.destCity, s.destCountry),
     ]);
     const gaps: string[] = [];
     if (!origin) gaps.push(`Could not locate "${s.originCity}, ${s.originCountry}". Check the city name.`);
