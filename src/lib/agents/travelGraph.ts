@@ -26,6 +26,7 @@ export const TravelState = Annotation.Root({
     destPin:   Annotation<{ name: string; country: string; countryCode: string; lat: number; lng: number; timezone: string } | undefined>(),
     startDate: Annotation<string>(),
     nights: Annotation<number>(),
+    travelers: Annotation<number>(),
     style: Annotation<BudgetStyle>(),
     mode: Annotation<TransportMode>(),
     displayCurrency: Annotation<DisplayCurrency>(),
@@ -82,10 +83,11 @@ async function logistics(s: S) {
 
     const end = endDateOf(s);
     const sameCity = s.originCity.toLowerCase() === s.destCity.toLowerCase();
+    const travelers = s.travelers ?? 1;
 
     const [flight, hotel, drivingKm] = await Promise.all([
-        !sameCity && s.mode === "fly" ? searchFlights(origin.airports, dest.airports, s.startDate, end) : null,
-        searchHotels(dest.name, dest.country, s.startDate, end, s.style),
+        !sameCity && s.mode === "fly" ? searchFlights(origin.airports, dest.airports, s.startDate, end, travelers) : null,
+        searchHotels(dest.name, dest.country, s.startDate, end, s.style, travelers),
         !sameCity && s.mode === "drive" ? getDrivingDistanceKm(origin, dest) : null
     ]);
 
@@ -137,6 +139,7 @@ async function budget(s: S) {
         originCity: s.originCity, destCity: s.destCity,
         origin, destination: dest,
         mode: s.mode, style: s.style, nights: s.nights,
+        travelers: s.travelers ?? 1,
         requestedOutbound: s.startDate,
         flight: s.flight, hotel: s.hotel, drivingKm: s.drivingKm,
         fuelPricePerLiter: s.fuelPrice, fxRate, displayCurrency: s.displayCurrency

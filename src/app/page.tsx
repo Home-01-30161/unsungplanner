@@ -259,6 +259,7 @@ export default function Home() {
   const [startDate,  setStartDate]  = useState('');
   const [minDate,    setMinDate]    = useState('');
   const [nights,     setNights]     = useState('4');
+  const [travelers,  setTravelers]  = useState('1');
   const [style,      setStyle]      = useState('Mid-range');
   const [mode,       setMode]       = useState('fly');
   const [currency,   setCurrency]   = useState('USD');
@@ -298,7 +299,7 @@ export default function Home() {
     try {
       const body: Record<string, unknown> = {
         originCity, originCountry, destCity, destCountry,
-        startDate, nights: Number(nights), style, mode, displayCurrency: currency,
+        startDate, nights: Number(nights), travelers: Number(travelers), style, mode, displayCurrency: currency,
       };
       if (originPin) body.originPin = originPin;
       if (destPin)   body.destPin   = destPin;
@@ -384,15 +385,27 @@ export default function Home() {
             onClearPin={() => setDestPin(null)}
           />
 
-          {/* Dates */}
+          {/* Dates & Travelers */}
           <label className="text-xs font-semibold text-slate-300">Start date
             <input id="start-date" type="date" className={fieldCls + ' mt-1'} value={startDate} min={minDate}
               onChange={(e) => setStartDate(e.target.value)} required />
           </label>
-          <label className="text-xs font-semibold text-slate-300">Nights (1–14)
-            <input id="nights" type="number" min={1} max={14} className={fieldCls + ' mt-1'} value={nights}
-              onChange={(e) => setNights(e.target.value)} required />
-          </label>
+          <div className="grid grid-cols-2 gap-2">
+            <label className="text-xs font-semibold text-slate-300">Nights (1–14)
+              <input id="nights" type="number" min={1} max={14} className={fieldCls + ' mt-1'} value={nights}
+                onChange={(e) => setNights(e.target.value)} required />
+            </label>
+            <label className="text-xs font-semibold text-slate-300">Travelers
+              <select id="travelers" className={fieldCls + ' mt-1'} value={travelers} onChange={(e) => setTravelers(e.target.value)}>
+                <option value="1">1 adult</option>
+                <option value="2">2 adults</option>
+                <option value="3">3 adults</option>
+                <option value="4">4 adults</option>
+                <option value="5">5 adults</option>
+                <option value="6">6 adults</option>
+              </select>
+            </label>
+          </div>
 
           {/* Options */}
           <label className="text-xs font-semibold text-slate-300">Budget level
@@ -449,7 +462,9 @@ export default function Home() {
         {result?.budget && (
           <section className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-4">
             <div className="flex items-baseline justify-between flex-wrap gap-2">
-              <h2 className="text-lg font-bold">Budget (1 traveller)</h2>
+              <h2 className="text-lg font-bold">
+                Budget ({result.budget.travelers ?? travelers} traveller{Number(result.budget.travelers ?? travelers) > 1 ? 's' : ''})
+              </h2>
               <span className="text-2xl font-black text-emerald-400">
                 {fmt(result.budget.totalKnownUSD, result.budget)}
                 {!result.budget.complete && <span className="text-sm text-amber-300"> + missing items</span>}

@@ -22,6 +22,7 @@ export interface BudgetInput {
     mode: TransportMode;
     style: BudgetStyle;
     nights: number;
+    travelers: number;
     requestedOutbound: string; // the date the user originally requested
     flight: FlightQuote | null;
     hotel: HotelQuote | null;
@@ -51,7 +52,7 @@ export function buildBudget(i: BudgetInput): Budget {
                 source: "live",
                 url: f?.searchUrl,
                 note: f
-                    ? `${f.fromAirport} → ${f.toAirport}${f.via ? ` (via ${f.via})` : ""}, ${f.airline}, 1 adult${dateNote}`
+                    ? `${f.fromAirport} → ${f.toAirport}${f.via ? ` (via ${f.via})` : ""}, ${f.airline}, ${i.travelers} adult${i.travelers > 1 ? "s" : ""}${dateNote}`
                     : i.destination.airports.length
                         ? "No fare found ±3 days. Check Google Flights."
                         : `${i.destination.name} has no airport codes on file. Try driving.`
@@ -95,16 +96,34 @@ export function buildBudget(i: BudgetInput): Budget {
         source: "live",
         url: i.hotel?.searchUrl,
         note: i.hotel
-            ? `Cheapest of ${i.hotel.sampleSize} listings, from $${i.hotel.medianNightUSD}/night (e.g. ${i.hotel.sampleName})`
+            ? `${i.hotel.sampleName} — $${i.hotel.medianNightUSD}/night (${i.travelers > 1 ? `${i.travelers} guests, ` : ""}cheapest of ${i.hotel.sampleSize} listings)`
             : "No live hotel rates found."
     });
-    lines.push({ id: "food",   label: "Food",                 amountUSD: daily.food          * days, source: "estimate", note: `~$${daily.food}/day (rough global estimate)` });
+    lines.push({
+        id: "food",
+        label: "Food",
+        amountUSD: daily.food * days * i.travelers,
+        source: "estimate",
+        note: i.travelers > 1 ? `~$${daily.food}/day per person (${i.travelers} travellers)` : `~$${daily.food}/day (rough global estimate)`
+    });
     if (i.mode !== "drive" || sameCity) {
-        lines.push({ id: "local", label: "Local transport",   amountUSD: daily.localTransport * days, source: "estimate", note: `~$${daily.localTransport}/day` });
+        lines.push({
+            id: "local",
+            label: "Local transport",
+            amountUSD: daily.localTransport * days * i.travelers,
+            source: "estimate",
+            note: i.travelers > 1 ? `~$${daily.localTransport}/day per person (${i.travelers} travellers)` : `~$${daily.localTransport}/day`
+        });
     }
-    lines.push({ id: "activities", label: "Activities & entry fees", amountUSD: daily.activities * days, source: "estimate", note: `~$${daily.activities}/day` });
+    lines.push({
+        id: "activities",
+        label: "Activities & entry fees",
+        amountUSD: daily.activities * days * i.travelers,
+        source: "estimate",
+        note: i.travelers > 1 ? `~$${daily.activities}/day per person (${i.travelers} travellers)` : `~$${daily.activities}/day`
+    });
 
     const totalKnownUSD = lines.reduce((sum, l) => sum + (l.amountUSD ?? 0), 0);
     const missing = lines.filter((l) => l.amountUSD == null).map((l) => l.label);
-    return { lines, totalKnownUSD, missing, complete: missing.length === 0, fxRate: i.fxRate, displayCurrency: i.displayCurrency };
+    return { lines, totalKnownUSD, missing, complete: missing.length === 0, fxRate: i.fxRate, displayCurrency: i.displayCurrency, travelers: i.travelers };
 }

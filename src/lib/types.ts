@@ -37,4 +37,5 @@ export type Budget = {
     complete: boolean;
     fxRate: number | null; // USD -> display currency
     displayCurrency: DisplayCurrency;
+    travelers?: number;
 };

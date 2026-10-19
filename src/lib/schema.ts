@@ -29,6 +29,7 @@ export const PlanRequest = z.object({
         .refine((d) => !Number.isNaN(Date.parse(d)), "Invalid date")
         .refine((d) => d >= todayUTC(), "Start date is in the past"),
     nights:          z.coerce.number().int().min(1).max(14),
+    travelers:       z.coerce.number().int().min(1).max(6).default(1),
     style:           z.enum(BUDGET_STYLES),
     mode:            z.enum(TRANSPORT_MODES),
     displayCurrency: z.enum(DISPLAY_CURRENCIES),

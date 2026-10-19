@@ -186,6 +186,18 @@ const REGION_TO_CITY: Record<string, string> = {
     "tokushima": "Tokushima", "tokyo": "Tokyo", "tottori": "Tottori",
     "toyama": "Toyama", "wakayama": "Wakayama", "yamagata": "Yamagata",
     "yamaguchi": "Yamaguchi", "yamanashi": "Kofu",
+    // Common German states
+    "bayern": "Munich", "bavaria": "Munich",
+    "baden-wurttemberg": "Stuttgart", "baden-wuerttemberg": "Stuttgart",
+    "hessen": "Frankfurt", "hesse": "Frankfurt",
+    "nordrhein-westfalen": "Cologne", "north rhine-westphalia": "Cologne",
+    "sachsen": "Dresden", "saxony": "Dresden",
+    "niedersachsen": "Hannover", "lower saxony": "Hannover",
+    // Common Italian & Spanish regions
+    "toscana": "Florence", "tuscany": "Florence",
+    "lombardia": "Milan", "lombardy": "Milan",
+    "andalucia": "Seville", "andalusia": "Seville",
+    "catalunya": "Barcelona", "catalonia": "Barcelona",
     // Common US state → capital/main city
     "california": "Los Angeles", "new york state": "New York",
     "texas": "Houston", "florida": "Miami", "illinois": "Chicago",

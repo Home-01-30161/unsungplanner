@@ -39,6 +39,32 @@ const COUNTRY_TZ: Record<string, string> = {
     "AT": "Europe/Vienna",
 };
 
+const REGION_ALIASES: Record<string, string> = {
+    // Germany
+    "bayern": "bavaria",
+    "bavaria": "bavaria",
+    "baden-wurttemberg": "baden-wurttemberg",
+    "baden-wuerttemberg": "baden-wurttemberg",
+    "hessen": "hesse",
+    "hesse": "hesse",
+    "nordrhein-westfalen": "north rhine-westphalia",
+    "north rhine-westphalia": "north rhine-westphalia",
+    "niedersachsen": "lower saxony",
+    "lower saxony": "lower saxony",
+    "sachsen": "saxony",
+    "saxony": "saxony",
+    // Italy
+    "toscana": "tuscany",
+    "tuscany": "tuscany",
+    "lombardia": "lombardy",
+    "lombardy": "lombardy",
+    // Spain
+    "andalucia": "andalusia",
+    "andalusia": "andalusia",
+    "catalunya": "catalonia",
+    "catalonia": "catalonia",
+};
+
 function stripDiacritics(s: string): string {
     return s.normalize("NFD").replace(/[\u0300-\u036f]/g, "").toLowerCase();
 }
@@ -48,6 +74,7 @@ export function searchCitiesLocal(query: string, countryQuery: string = "", max:
     const cQ = stripDiacritics(countryQuery.trim());
     if (q.length < 2) return [];
 
+    const targetAdmin = REGION_ALIASES[q] ?? q;
     const matches: (CitySearchResult & { score: number })[] = [];
 
     for (const c of CITIES) {
@@ -68,9 +95,9 @@ export function searchCitiesLocal(query: string, countryQuery: string = "", max:
         const exactCity = cityClean === q;
         const cityStartsWith = cityClean.startsWith(q);
         const cityIncludes = cityClean.includes(q);
-        const adminExact = adminClean === q;
-        const adminStartsWith = adminClean.startsWith(q);
-        const adminIncludes = adminClean.includes(q);
+        const adminExact = adminClean === targetAdmin || adminClean === q;
+        const adminStartsWith = adminClean.startsWith(targetAdmin) || adminClean.startsWith(q);
+        const adminIncludes = adminClean.includes(targetAdmin) || adminClean.includes(q);
 
         if (exactCity || cityStartsWith || cityIncludes || adminExact || adminStartsWith || adminIncludes) {
             let score = 0;

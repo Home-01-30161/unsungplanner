@@ -23,11 +23,14 @@ type SerpFlightResponse = {
 type SerpHotelResponse = {
     error?: string;
     properties?: HotelProperty[];
-    search_metadata?: { google_url?: string };           // ← actual URL SerpAPI used
+    search_metadata?: { google_hotels_url?: string; google_url?: string };
 };
 
 type HotelProperty = {
     name?: string;
+    link?: string;
+    overall_rating?: number;
+    reviews?: number;
     rate_per_night?: {
         lowest?: string;           // e.g. "$19" or "฿638"
         extracted_lowest?: number; // numeric, may be per-person for Japanese 民宿
@@ -41,7 +44,8 @@ async function fetchFlightPrice(
     arr: string,
     outbound: string,
     inbound: string,
-    apiKey: string
+    apiKey: string,
+    adults: number = 1
 ): Promise<{
     priceUSD: number; airline: string;
     fromAirport: string; toAirport: string;
@@ -55,7 +59,7 @@ async function fetchFlightPrice(
             outbound_date: outbound,
             return_date: inbound,
             type: "1",      // round trip
-            adults: "1",
+            adults: String(adults),
             currency: "USD",
             hl: "en",
             api_key: apiKey,
@@ -112,7 +116,8 @@ export async function searchFlights(
     fromAirports: string[],
     toAirports: string[],
     outbound: string,
-    inbound: string
+    inbound: string,
+    adults: number = 1
 ): Promise<FlightQuote | null> {
     const apiKey = process.env.SERPAPI_KEY;
     if (!apiKey || !fromAirports.length || !toAirports.length) return null;
@@ -124,16 +129,16 @@ export async function searchFlights(
     for (const dep of fromAirports) for (const arr of toAirports) individualPairs.push([dep, arr]);
 
     const offsets = [0, 1, -1, 2, -2, 3, -3];
-    const cacheKey = `flights4:${combinedDep}:${combinedArr}:${outbound}:${inbound}`;
+    const cacheKey = `flights5:${combinedDep}:${combinedArr}:${outbound}:${inbound}:${adults}`;
 
     return cached<FlightQuote>(cacheKey, 2 * 3600, async () => {
         for (const offset of offsets) {
             const tryOut = offset === 0 ? outbound : addDays(outbound, offset);
             const tryRet = offset === 0 ? inbound  : addDays(inbound,  offset);
 
-            const combined = await fetchFlightPrice(combinedDep, combinedArr, tryOut, tryRet, apiKey);
+            const combined = await fetchFlightPrice(combinedDep, combinedArr, tryOut, tryRet, apiKey, adults);
             const individuals = await Promise.all(
-                individualPairs.map(([d, a]) => fetchFlightPrice(d, a, tryOut, tryRet, apiKey))
+                individualPairs.map(([d, a]) => fetchFlightPrice(d, a, tryOut, tryRet, apiKey, adults))
             );
 
             const all = [combined, ...individuals].filter((r): r is NonNullable<typeof r> => r !== null);
@@ -162,7 +167,8 @@ export async function searchHotels(
     country: string,
     checkIn: string,
     checkOut: string,
-    style: BudgetStyle
+    style: BudgetStyle,
+    adults: number = 1
 ): Promise<HotelQuote | null> {
     const apiKey = process.env.SERPAPI_KEY;
     if (!apiKey) return null;
@@ -175,16 +181,16 @@ export async function searchHotels(
     const query = `${city}, ${country}`;
     const classFilter = HOTEL_CLASS[style];
 
-    return cached<HotelQuote>(`hotels3:${query}:${checkIn}:${checkOut}:${style}`, 2 * 3600, async () => {
+    return cached<HotelQuote>(`hotels8:${query}:${checkIn}:${checkOut}:${style}:${adults}`, 2 * 3600, async () => {
         try {
             const paramObj: Record<string, string> = {
                 engine: "google_hotels",
-                // For Backpacker search hostels/guesthouses; star filter would exclude them
-                q: style === "Backpacker" ? `${query} hostel guesthouse` : `${query} hotels`,
+                q: `${query} hotels`,
                 check_in_date: checkIn,
                 check_out_date: checkOut,
-                adults: "1",
+                adults: String(adults),
                 currency: "USD",
+                sort_by: "3", // 3 = Lowest Price: ensures Google returns properties sorted by lowest available price
                 hl: "en",
                 api_key: apiKey,
             };
@@ -196,14 +202,37 @@ export async function searchHotels(
             const data = (await res.json()) as SerpHotelResponse;
             if (data.error) return null;
 
+            const minRating = style === "Backpacker" ? 2.0 : 3.2;
+            const minReviews = style === "Backpacker" ? 10 : 25;
+
             const priced = (data.properties ?? [])
                 .map((p) => {
                     const raw = p.rate_per_night?.extracted_lowest;
                     if (typeof raw !== "number") return null;
                     // Sanity-check: skip implausibly cheap rates (<$12 USD) which are
                     // likely per-person dorm prices, not per-room (common in Japan/Asia).
-                    // $12 is below any commercially-listed private room globally.
                     if (raw < 12) return null;
+
+                    // 1. Skip alternate date prices (Google shows cached alternate date if property is sold out for requested date)
+                    if (p.link && p.link.includes("checkin=") && !p.link.includes(`checkin=${checkIn}`)) {
+                        return null;
+                    }
+
+                    // 2. Skip affiliate redirect ads that have no direct live inventory on Google Travel
+                    if (p.link && p.link.includes("trip.tpx.lv")) {
+                        return null;
+                    }
+
+                    // 3. Skip poor ratings (relaxed for Backpacker where users prioritize absolute lowest price)
+                    if (p.overall_rating != null && p.overall_rating < minRating) {
+                        return null;
+                    }
+
+                    // 4. Skip unverified ghost listings with very few reviews
+                    if (p.reviews != null && p.reviews < minReviews) {
+                        return null;
+                    }
+
                     return { name: p.name ?? "Unnamed property", rate: raw };
                 })
                 .filter((p): p is { name: string; rate: number } => p !== null)
@@ -213,11 +242,9 @@ export async function searchHotels(
 
             const cheapest = priced[0];
 
-            // Use the ACTUAL Google URL that SerpAPI used — this is exactly what the
-            // user will see when they click the link.
+            // Use the Google Hotels search URL with hotel name and city, check-in/out, and adults
             const searchUrl =
-                data.search_metadata?.google_url ??
-                `https://www.google.com/travel/hotels?q=${encodeURIComponent(query)}&checkin=${checkIn}&checkout=${checkOut}`;
+                `https://www.google.com/travel/search?q=${encodeURIComponent(cheapest.name + " " + city)}&checkin=${checkIn}&checkout=${checkOut}&adults=${adults}`;
 
             return {
                 medianNightUSD: cheapest.rate,
