@@ -1,258 +1,112 @@
-# 📝 Scratchpad: วิธีอ่านโค้ดให้เข้าใจทั้งโปรเจกต์
+# 📝 Scratchpad: วิธีอ่านและทำความเข้าใจ Codebase ทั้งหมดของ Unsung Planner
+
+เอกสารนี้เป็นคู่มือสรุปสถาปัตยกรรม (Architecture) และ Roadmap ในการอ่านทำความเข้าใจโค้ดในโปรเจกต์นี้ทั้งหมดอย่างเป็นระบบ
 
 ---
 
-## 🧠 หลักคิดก่อนอ่าน
+## 🧠 1. หลักคิดก่อนอ่าน (The Mental Model)
 
-> **อย่าอ่านทุกบรรทัด** — อ่านเพื่อตอบคำถาม
-> คำถามที่ต้องตอบให้ได้คือ:
-> 1. ข้อมูลชิ้นนี้ **มาจากไหน**?
-> 2. ข้อมูลชิ้นนี้ **ไปที่ไหน**?
-> 3. ไฟล์นี้ **ทำหน้าที่อะไร** ในระบบ?
-
----
-
-## 🗺️ ขั้นตอนอ่านโค้ด (ทำตามลำดับ)
-
-### Step 1 — ดูภาพรวมก่อน (5 นาที)
-
-```
-1. เปิด package.json
-   → ดู dependencies ว่าใช้ library อะไรบ้าง
-   → ดู scripts ว่า run ยังไง
-
-2. ดู folder structure
-   src/
-   ├── app/        → UI + API endpoints
-   ├── lib/        → Business logic
-   └── data/       → Static data files
-```
-
-**คำถามหลัง Step 1:**
-- โปรเจกต์นี้ใช้ Framework อะไร? → Next.js
-- ใช้ AI library อะไร? → LangGraph + OpenAI
-- เก็บ data ที่ไหน? → Supabase + local JSON
+> **อย่าอ่านโค้ดเรียงบรรทัด** — ให้อ่านตาม **Data Flow** (การไหลของข้อมูล)
+> คำถาม 3 ข้อที่ต้องตอบให้ได้ในแต่ละส่วน:
+> 1. ข้อมูลนี้ **มาจากไหน**? (Input จาก User หรือ API ภายนอก)
+> 2. ใครเป็นคน **ประมวลผล**? (คำนวณด้วยโค้ด หรือส่งให้ LLM เขียน)
+> 3. ข้อมูลนี้ **ส่งไปที่ไหนต่อ**? (ลง Database, เข้า Cache หรือ Stream กลับไปหน้าเว็บ)
 
 ---
 
-### Step 2 — อ่าน Types ก่อน (10 นาที)
+## 🗺️ 2. ภาพรวมสถาปัตยกรรม (System Architecture)
 
-📄 **`src/lib/types.ts`** และ **`src/lib/schema.ts`**
-
-**วิธีอ่าน:**
 ```
-สำหรับแต่ละ type ให้ถามว่า:
-"ข้อมูลแบบนี้ใช้ทำอะไรในระบบ?"
-
-FlightQuote    → ผลลัพธ์จากการค้นหาตั๋ว
-HotelQuote     → ผลลัพธ์จากการค้นหาโรงแรม
-Budget         → สรุปค่าใช้จ่ายทั้งหมด
-BudgetLine     → แต่ละรายการในบิล
-WeatherSummary → สรุปสภาพอากาศ
-```
-
-**ถ้าเจอ Syntax ไม่เข้าใจ:**
-```ts
-// ? หลัง field = optional (มีหรือไม่มีก็ได้)
-via?: string
-
-// | = union (อันใดอันหนึ่ง)
-amountUSD: number | null
-
-// as const = ห้ามเปลี่ยน array นี้
-const MODES = ["fly", "drive"] as const
-
-// [number] = union ทุก element ใน array
-type Mode = (typeof MODES)[number]  // = "fly" | "drive"
+[ผู้ใช้ใน Browser]
+       │
+       ▼  (POST /api/plan พร้อม Turnstile Token)
+[src/app/api/plan/route.ts]
+       │
+       ├─► ตรวจสอบ Input ด้วย Zod (src/lib/schema.ts)
+       ├─► ตรวจสอบ Captcha & Client IP (src/lib/security.ts)
+       ├─► ตรวจสอบโควตา / Rate Limit (src/lib/cache.ts -> Supabase)
+       │
+       ▼  (เรียก travelWorkflow.stream)
+[src/lib/agents/travelGraph.ts]  <-- AI Workflow (LangGraph)
+       │
+       ├─► Node 0: geocode_cities    (แปลงชื่อเมือง -> พิกัด & สนามบิน)
+       │       │
+       │       ├─► [Parallel] Node 1: find_logistics (ตั๋วเครื่องบิน/โรงแรม/ขับรถ)
+       │       ├─► [Parallel] Node 2: find_research  (Tavily ค้นที่เที่ยว/ร้านอาหาร)
+       │       └─► [Parallel] Node 3: find_weather   (พยากรณ์อากาศ + วันหยุดราชการ)
+       │               │
+       ├─► Node 4: calc_budget       (คำนวณเงินรวมด้วยสูตรคณิตศาสตร์ล้วน ไม่ใช้ LLM)
+       │       │
+       └─► Node 5: write_itinerary   (ส่งข้อมูลทั้งหมดให้ LLM สรุปเป็นแผนการเดินทาง)
+               │
+               ▼  (NDJSON Streaming ตอบกลับทันทีที่แต่ละ Node เสร็จ)
+[src/app/page.tsx แสดงผลบนหน้าจอแบบ Real-time]
 ```
 
 ---
 
-### Step 3 — ตาม Flow ของ Request (30 นาที)
+## 🗂️ 3. แผนที่นำทางไฟล์สำคัญ (File Directory Map)
 
-> เริ่มจาก **จุดที่ผู้ใช้กดปุ่ม** แล้วตามไปทีละขั้น
+### ก้อนที่ 1: Frontend & User Entrypoint
+- [`src/app/page.tsx`](file:///d:/unsungplanner/src/app/page.tsx)
+  - หน้า UI หลัก เขียนด้วย React 19 + Tailwind CSS
+  - มีฟอร์มเลือกเมืองแบบ Auto-complete (`CityPicker`), ช่องกรอกงบประมาณ และตัวเลือกการเดินทาง
+  - ฟังก์ชัน `handleSubmit` จะยิง `fetch('/api/plan')` และอ่าน Stream ด้วย `ReadableStreamDefaultReader`
+  - มีฟังก์ชัน `safeHref()` ป้องกัน XSS จากลิงก์ภายนอก
 
-```
-📍 จุดเริ่ม: src/app/page.tsx
-   → หา: fetch("/api/plan")  ← ตรงนี้คือส่ง request
-   → หา: for await           ← ตรงนี้คือรับ stream กลับ
+### ก้อนที่ 2: API Gateway & Security
+- [`src/app/api/plan/route.ts`](file:///d:/unsungplanner/src/app/api/plan/route.ts)
+  - จุดรับ Request หลัก มีระบบป้องกัน 3 ชั้น:
+    1. ตรวจสอบขนาด Body ป้องกัน Payload เกิน 16KB
+    2. ตรวจสอบ Cloudflare Turnstile Captcha
+    3. ตรวจสอบ Rate Limit ต่อ IP (5 ครั้ง/ชม.) และโควตารวมทั้งระบบ (100 ครั้ง/วัน)
+  - ส่งข้อมูลผลลัพธ์กลับแบบ NDJSON (Newline Delimited JSON)
+- [`src/lib/security.ts`](file:///d:/unsungplanner/src/lib/security.ts)
+  - รวมฟังก์ชันความปลอดภัย: `clientIp()` (ดึง IP ผ่าน Cloudflare/Vercel header), `verifyTurnstile()`, `scrubSecrets()` (ลบ API key ออกจาก Log)
+- [`next.config.ts`](file:///d:/unsungplanner/next.config.ts)
+  - ตั้งค่าความปลอดภัยของ Web Server เช่น CSP (Content Security Policy), HSTS, X-Frame-Options
 
-📍 ผ่าน: src/app/api/plan/route.ts
-   → บรรทัด 12: PlanRequest.safeParse()  ← ตรวจ input
-   → บรรทัด 16: takeDailyPlanSlot()      ← เช็ค quota
-   → บรรทัด 27: travelWorkflow.stream()  ← รัน AI
+### ก้อนที่ 3: The Core AI Agent (สมองกล)
+- [`src/lib/agents/travelGraph.ts`](file:///d:/unsungplanner/src/lib/agents/travelGraph.ts)
+  - **ไฟล์ที่สำคัญที่สุดในโปรเจกต์**
+  - ใช้ **LangGraph** สร้าง State Machine โดยมี State กลางชื่อ `TravelState`
+  - มี 6 Nodes: `geocode` -> `logistics`, `research`, `weather` (รันขนานกัน) -> `budget` -> `writer`
+  - มี Prompt สั่ง LLM ในฟังก์ชัน `writer()` ให้เขียนแผนการเดินทางแบบ Bullet พร้อมใส่ Citation `[1]`, `[2]`
 
-📍 เข้า: src/lib/agents/travelGraph.ts
-   → บรรทัด 222-235: ดู graph structure ก่อน
-   → แล้วค่อยดู function แต่ละ node
-```
+### ก้อนที่ 4: Connectors (ตัวเชื่อมต่อโลกภายนอก)
+- [`src/lib/connectors/geocode.ts`](file:///d:/unsungplanner/src/lib/connectors/geocode.ts): แปลงชื่อเมืองเป็นพิกัด และสแกนหารหัสสนามบิน IATA ในรัศมี 200 กม.
+- [`src/lib/connectors/travelData.ts`](file:///d:/unsungplanner/src/lib/connectors/travelData.ts): ค้นหาราคาตั๋วเครื่องบินและโรงแรมผ่าน SerpAPI (Google Flights/Hotels)
+- [`src/lib/connectors/routing.ts`](file:///d:/unsungplanner/src/lib/connectors/routing.ts): คำนวณระยะทางขับรถผ่าน OpenRouteService
+- [`src/lib/connectors/research.ts`](file:///d:/unsungplanner/src/lib/connectors/research.ts): ค้นเว็บหาที่เที่ยวและร้านอาหารผ่าน Tavily
+- [`src/lib/connectors/weather.ts`](file:///d:/unsungplanner/src/lib/connectors/weather.ts): ดึงพยากรณ์อากาศผ่าน Open-Meteo
+- [`src/lib/connectors/holidays.ts`](file:///d:/unsungplanner/src/lib/connectors/holidays.ts): ดึงวันหยุดราชการผ่าน Nager.Date
+- [`src/lib/connectors/currency.ts`](file:///d:/unsungplanner/src/lib/connectors/currency.ts): แปลงอัตราแลกเปลี่ยนเงินตรา
 
-**วาด Flow ง่ายๆ ในใจ:**
-```
-User กดปุ่ม
-    ↓
-page.tsx → POST /api/plan
-    ↓
-route.ts → validate → เรียก travelGraph
-    ↓
-travelGraph.ts → รัน nodes ทีละขั้น
-    ↓
-stream ผลกลับ → page.tsx แสดงผล
-```
-
----
-
-### Step 4 — อ่าน Node แต่ละตัวใน travelGraph.ts
-
-**วิธีอ่านแต่ละ node:**
-```
-1. ดู Input: node รับ state อะไร? (s.originCity, s.nights ...)
-2. ดู Process: ทำอะไร? (ยิง API? คำนวณ? ถาม LLM?)
-3. ดู Output: return อะไร? (ข้อมูลอะไรเพิ่มเข้า state)
-4. ดู Error: ถ้า fail คืน gaps ว่าอะไร?
-```
-
-**ลำดับ nodes:**
-```
-geocode_cities   → แปลงชื่อเมือง → lat/lng
-    ↓ (parallel)
-find_logistics   → ค้นตั๋ว/โรงแรม/ระยะทาง
-find_research    → ค้นเว็บหา attraction/restaurant
-find_weather     → ดึง forecast + วันหยุด
-    ↓ (รอทุกตัว)
-calc_budget      → คำนวณเงินรวม
-    ↓
-write_itinerary  → ให้ LLM เขียนแผนการเดินทาง
-```
+### ก้อนที่ 5: Data & Database Support
+- [`src/lib/cache.ts`](file:///d:/unsungplanner/src/lib/cache.ts): แคชผลลัพธ์ของ API เพื่อประหยัดเงิน และควบคุม Quota ผ่านฟังก์ชัน `take_slot` ใน Supabase
+- [`src/lib/budget.ts`](file:///d:/unsungplanner/src/lib/budget.ts): โค้ดคำนวณงบประมาณ (ไม่ใช้ AI คำนวณ เพื่อความถูกต้อง 100%)
+- [`supabase/migrations/20261023_security.sql`](file:///d:/unsungplanner/supabase/migrations/20261023_security.sql): ตารางฐานข้อมูล PostgreSQL และ Stored Procedure แบบ Atomic สำหรับควบคุม Quota
 
 ---
 
-### Step 5 — อ่าน Connector แต่ละตัว
+## ⏱️ 4. แนะนำขั้นตอนการอ่านตามลำดับเวลา (45 นาที)
 
-**วิธีอ่าน connector:**
-```
-1. ดู API ปลายทาง (ใช้ fetch ไปที่ URL ไหน?)
-2. ดู Input (รับ city? lat/lng? date?)
-3. ดู Output (return type คืออะไร?)
-4. ดู Cache (TTL นานแค่ไหน? ทำไม?)
-5. ดู Fallback (ถ้า API fail → return null?)
-```
-
-**ตัวอย่าง routing.ts:**
-```ts
-// Input: สองจุด lat/lng
-// Process: ยิง OpenRouteService API
-// Output: ระยะทาง km หรือ null
-// Cache: 30 วัน (เส้นทางไม่ค่อยเปลี่ยน)
-// Fallback: return null ถ้าไม่มี API key
-```
+1. **นาทีที่ 0 - 5 (Data Shape)**:
+   - เปิด [`src/lib/types.ts`](file:///d:/unsungplanner/src/lib/types.ts) เพื่อดูว่า Object ในระบบมีหน้าตาอย่างไร (`FlightQuote`, `HotelQuote`, `Budget`)
+2. **นาทีที่ 5 - 15 (Request Flow)**:
+   - เปิด [`src/app/api/plan/route.ts`](file:///d:/unsungplanner/src/app/api/plan/route.ts) ไล่ดูตั้งแต่รับ Request ตรวจสอบความปลอดภัย จนถึงคำสั่งเรียก `travelWorkflow.stream()`
+3. **นาทีที่ 15 - 30 (Graph Workflow)**:
+   - เปิด [`src/lib/agents/travelGraph.ts`](file:///d:/unsungplanner/src/lib/agents/travelGraph.ts)
+   - เลื่อนไปล่างสุดดูโครงสร้าง Graph (บรรทัด 222-236)
+   - ดูฟังก์ชันของแต่ละ Node ว่ารับ Input อะไร และส่ง Output อะไรเข้าสู่ State
+4. **นาทีที่ 30 - 40 (Connectors & Caching)**:
+   - เปิดดูตัวอย่าง Connector เช่น [`src/lib/connectors/travelData.ts`](file:///d:/unsungplanner/src/lib/connectors/travelData.ts) เพื่อดูวิธีเรียก API ภายนอกและการแคชผลลัพธ์
+5. **นาทีที่ 40 - 45 (Frontend Consumer)**:
+   - เปิด [`src/app/page.tsx`](file:///d:/unsungplanner/src/app/page.tsx) ดูฟังก์ชัน `applyEvent` และการเรนเดอร์ Itinerary
 
 ---
 
-## 🔍 เทคนิคอ่านโค้ดเร็ว
-
-### เทคนิค 1: อ่าน Signature ก่อน ไม่ต้องอ่านข้างใน
-```ts
-// อ่านแค่บรรทัดนี้ก็รู้แล้วว่า function ทำอะไร
-async function getDrivingDistanceKm(
-    from: { lat: number; lng: number },  // รับจุดเริ่ม
-    to: { lat: number; lng: number }     // รับจุดปลาย
-): Promise<number | null>                // คืนระยะทาง km
-```
-
-### เทคนิค 2: อ่าน return statement ก่อน
-```ts
-// กระโดดไปดู return ก่อน แล้วค่อยย้อนกลับมาดูว่าได้มายังไง
-return { flight, hotel, drivingKm, gaps };
-// → รู้ว่า function นี้ทำเรื่อง logistics
-```
-
-### เทคนิค 3: อ่าน comment ที่ขึ้นต้นด้วย //
-```ts
-/** Node 1: flights, hotels, driving distance. */
-// อ่าน JSDoc comment → รู้หน้าที่ทันที
-```
-
-### เทคนิค 4: ถ้าเจอ Promise.all — แปลว่าทำพร้อมกัน
-```ts
-const [flight, hotel, drivingKm] = await Promise.all([
-    searchFlights(...),  // ← 3 อันนี้รันพร้อมกัน
-    searchHotels(...),
-    getDrivingDistanceKm(...)
-]);
-```
-
-### เทคนิค 5: ถ้าเจอ try/catch — แปลว่า API อาจ fail
-```ts
-try {
-    const res = await fetch(url);
-    return data;
-} catch {
-    return null;  // ← fail gracefully
-}
-```
-
----
-
-## 📖 Keyword Glossary (คำศัพท์ที่เจอบ่อย)
-
-| Keyword | ความหมาย |
-|---|---|
-| `async/await` | รอผลก่อนทำต่อ (เรียก API) |
-| `Promise.all` | รันหลายอย่างพร้อมกัน |
-| `export` | ให้ไฟล์อื่น import ได้ |
-| `import type` | import เฉพาะ type (หายตอนรัน) |
-| `as const` | ห้ามเปลี่ยน array/object |
-| `?:` | field นี้ optional |
-| `| null` | อาจเป็น null ได้ |
-| `as Type` | บอก TypeScript ว่า type คืออะไร |
-| `z.object()` | Zod schema สำหรับ object |
-| `.safeParse()` | ตรวจข้อมูลตอนรัน (ไม่ throw) |
-| `Annotation.Root` | กำหนด State ของ LangGraph |
-| `StateGraph` | สร้าง AI workflow |
-| `.addEdge` | เชื่อม node ใน graph |
-| `ReadableStream` | ส่งข้อมูลแบบ stream |
-| `for await...of` | วนรับ stream ทีละชิ้น |
-
----
-
-## ❓ คำถามที่ควรตอบได้หลังอ่านจบ
-
-- [ ] ผู้ใช้ต้องกรอกอะไรบ้างเพื่อสร้าง trip plan?
-- [ ] มีกี่ nodes ใน AI agent? แต่ละตัวทำอะไร?
-- [ ] Node ไหนรัน parallel? Node ไหนรอตามลำดับ?
-- [ ] ถ้า API ภายนอกล่ม ระบบจะพังไหม? ทำไม?
-- [ ] Cache ทำงานยังไง? ถ้าไม่มี Supabase จะเกิดอะไร?
-- [ ] Zod ใช้ทำอะไร? ต่างจาก TypeScript type ยังไง?
-- [ ] ทำไม response ส่งกลับแบบ stream ไม่ใช่ JSON ก้อนเดียว?
-- [ ] API key เก็บที่ไหน? ปลอดภัยจาก user ยังไง?
-
----
-
-## 🗂️ Quick Reference — ไฟล์สำคัญ
-
-```
-types.ts          → รูปร่างของข้อมูลทั้งหมด
-schema.ts         → ตรวจ input จากผู้ใช้ (Zod)
-cache.ts          → บันทึกผล API ชั่วคราว (Supabase)
-budget.ts         → คำนวณค่าใช้จ่าย
-dates.ts          → helper วันที่
-
-connectors/
-  routing.ts      → ระยะทางขับรถ
-  weather.ts      → พยากรณ์อากาศ
-  holidays.ts     → วันหยุดราชการ
-  currency.ts     → อัตราแลกเปลี่ยน
-  research.ts     → ค้นเว็บด้วย Tavily AI
-  travelData.ts   → ตั๋วเครื่องบิน + โรงแรม (SerpAPI)
-  geocode.ts      → ชื่อเมือง → lat/lng
-  citySearch.ts   → autocomplete ชื่อเมือง
-
-agents/
-  travelGraph.ts  → AI workflow ทั้งหมด ⭐
-
-app/
-  page.tsx        → UI หลัก
-  api/plan/       → รับ request → รัน agent → stream กลับ
-  api/cities/     → autocomplete endpoint
-```
+## 💡 จุดเด่นทางเทคนิคที่ควรจดจำ
+- **Zero-Hallucination Pricing**: แยกการคำนวณราคาออกจาก LLM โดยสิ้นเชิง
+- **Stream-First UX**: ผู้ใช้ไม่ต้องรอโหลด 30 วินาที แต่จะเห็น Progress ขยับทีละ Node ทันทีที่ API แต่ละตัวทำงานเสร็จ
+- **Frugal API Design**: มีระบบ Caching และจำกัดจำนวนการเรียกภายนอกอย่างเคร่งครัดเพื่อประหยัดต้นทุน Free Tier
