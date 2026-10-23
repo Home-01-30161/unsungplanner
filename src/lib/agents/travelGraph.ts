@@ -55,6 +55,7 @@ const llm = new ChatOpenAI({
     apiKey: process.env.TYPHOON_API_KEY,
     model: process.env.TYPHOON_MODEL || "typhoon-v2.5-30b-a3b-instruct",
     temperature: 0.4,
+    timeout: 45_000,
     configuration: { baseURL: "https://api.opentyphoon.ai/v1" }
 });
 

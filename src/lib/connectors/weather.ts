@@ -17,7 +17,7 @@ export async function getForecast(dest: CityInfo, startDate: string, endDate: st
         `https://api.open-meteo.com/v1/forecast?latitude=${dest.lat}&longitude=${dest.lng}` +
         `&daily=temperature_2m_max,precipitation_probability_max&timezone=${tz}&start_date=${start}&end_date=${end}`;
     try {
-        const res = await fetch(url);
+        const res = await fetch(url, { signal: AbortSignal.timeout(8_000) });
         if (!res.ok) return null;
         const data = (await res.json()) as {
             daily?: { temperature_2m_max?: number[]; precipitation_probability_max?: (number | null)[] };

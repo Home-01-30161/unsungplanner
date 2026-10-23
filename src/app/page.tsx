@@ -4,6 +4,81 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { Compass, Loader2, AlertTriangle, CheckCircle2, Circle, ExternalLink, ChevronDown, ChevronUp, MapPin, X } from 'lucide-react';
 import { BUDGET_STYLES, DISPLAY_CURRENCIES, type Budget, type ResearchSource } from '@/lib/types';
 
+// Set NEXT_PUBLIC_TURNSTILE_SITE_KEY to enable the captcha. When unset the app
+// behaves exactly as before, and the API also skips verification.
+const TURNSTILE_SITE_KEY = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
+
+declare global {
+  interface Window {
+    turnstile?: {
+      render: (el: HTMLElement, opts: Record<string, unknown>) => string;
+      remove: (id: string) => void;
+    };
+  }
+}
+
+/** Only absolute http(s) URLs may be rendered as links (research data is untrusted). */
+function safeHref(url: string): string | undefined {
+  try {
+    const parsed = new URL(url);
+    return parsed.protocol === 'http:' || parsed.protocol === 'https:' ? parsed.href : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+function TurnstileWidget({ onToken, resetKey }: { onToken: (token: string) => void; resetKey: number }) {
+  const container = useRef<HTMLDivElement>(null);
+  const widgetId = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (!TURNSTILE_SITE_KEY) return;
+    let cancelled = false;
+
+    const render = () => {
+      if (cancelled || !container.current || !window.turnstile) return;
+      if (widgetId.current) {
+        window.turnstile.remove(widgetId.current);
+        widgetId.current = null;
+      }
+      widgetId.current = window.turnstile.render(container.current, {
+        sitekey: TURNSTILE_SITE_KEY,
+        theme: 'dark',
+        callback: (token: string) => onToken(token),
+        'expired-callback': () => onToken(''),
+        'error-callback': () => onToken(''),
+      });
+    };
+
+    const existing = document.querySelector<HTMLScriptElement>('script[data-turnstile]');
+    if (window.turnstile) {
+      render();
+    } else if (existing) {
+      existing.addEventListener('load', render);
+    } else {
+      const script = document.createElement('script');
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.dataset.turnstile = '1';
+      script.addEventListener('load', render);
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      cancelled = true;
+      existing?.removeEventListener('load', render);
+      if (widgetId.current && window.turnstile) {
+        window.turnstile.remove(widgetId.current);
+        widgetId.current = null;
+      }
+    };
+  }, [onToken, resetKey]);
+
+  if (!TURNSTILE_SITE_KEY) return null;
+  return <div ref={container} className="md:col-span-2 flex justify-center" />;
+}
+
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type CityCandidate = {
@@ -217,9 +292,10 @@ function renderWithCitations(text: string, sources: ResearchSource[]) {
     const match = part.match(/^\[(\d+)\]$/);
     if (match) {
       const src = sources[Number(match[1]) - 1];
-      if (src) {
+      const href = src ? safeHref(src.url) : undefined;
+      if (src && href) {
         return (
-          <a key={i} href={src.url} target="_blank" rel="noopener noreferrer" title={src.title}
+          <a key={i} href={href} target="_blank" rel="noopener noreferrer" title={src.title}
             className="inline-flex items-center gap-0.5 text-emerald-400 hover:text-emerald-300 text-xs font-semibold align-super leading-none transition">
             [{match[1]}]
           </a>
@@ -269,9 +345,16 @@ export default function Home() {
   const [done,    setDone]    = useState<string[]>([]);
   const [error,   setError]   = useState<string | null>(null);
   const [result,  setResult]  = useState<Result | null>(null);
+  const [turnstileToken, setTurnstileToken] = useState('');
+  const [turnstileReset, setTurnstileReset] = useState(0);
+
+  const handleTurnstileToken = useCallback((token: string) => setTurnstileToken(token), []);
 
   useEffect(() => {
     const today = new Date();
+    // Computed on the client only: a server-side clock (or a different timezone)
+    // would hydrate a different date and trigger a mismatch warning.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMinDate(today.toISOString().slice(0, 10));
     setStartDate(new Date(today.getTime() + 30 * 86_400_000).toISOString().slice(0, 10));
   }, []);
@@ -295,6 +378,10 @@ export default function Home() {
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
+    if (TURNSTILE_SITE_KEY && !turnstileToken) {
+      setError('Please complete the human verification below and try again.');
+      return;
+    }
     setLoading(true); setError(null); setResult(null); setDone([]); setSourcesOpen(false);
     try {
       const body: Record<string, unknown> = {
@@ -303,6 +390,7 @@ export default function Home() {
       };
       if (originPin) body.originPin = originPin;
       if (destPin)   body.destPin   = destPin;
+      if (TURNSTILE_SITE_KEY) body.turnstileToken = turnstileToken;
 
       const res = await fetch('/api/plan', {
         method: 'POST',
@@ -328,6 +416,11 @@ export default function Home() {
       setError(err instanceof Error ? err.message : 'Failed to reach the planner.');
     } finally {
       setLoading(false);
+      // Turnstile tokens are single-use: get a fresh one for the next attempt.
+      if (TURNSTILE_SITE_KEY) {
+        setTurnstileToken('');
+        setTurnstileReset((n) => n + 1);
+      }
     }
   }
 
@@ -426,6 +519,8 @@ export default function Home() {
             </select>
           </label>
 
+          <TurnstileWidget onToken={handleTurnstileToken} resetKey={turnstileReset} />
+
           <div className="md:col-span-2">
             <button id="submit-btn" type="submit" disabled={!canSubmit}
               className="w-full bg-emerald-500 hover:bg-emerald-400 disabled:bg-slate-800 disabled:text-slate-500 text-slate-950 font-bold py-3.5 rounded-xl flex items-center justify-center gap-2 transition">
@@ -485,12 +580,17 @@ export default function Home() {
                     </td>
                     <td className="py-2 pl-3 text-xs text-slate-500">
                       {l.source === 'live'
-                        ? l.url
-                          ? <a href={l.url} target="_blank" rel="noopener noreferrer"
-                              className="text-emerald-400 hover:text-emerald-300 underline decoration-dotted underline-offset-2 transition-colors">
-                              live price ↗
-                            </a>
-                          : <span>live price</span>
+                        ? (() => {
+                            const href = l.url ? safeHref(l.url) : undefined;
+                            return href ? (
+                              <a href={href} target="_blank" rel="noopener noreferrer"
+                                className="text-emerald-400 hover:text-emerald-300 underline decoration-dotted underline-offset-2 transition-colors">
+                                live price ↗
+                              </a>
+                            ) : (
+                              <span>live price</span>
+                            );
+                          })()
                         : l.source === 'research' ? 'web, unverified' : 'estimate'}
                     </td>
                   </tr>
@@ -525,17 +625,27 @@ export default function Home() {
             </button>
             {sourcesOpen && (
               <ul className="divide-y divide-slate-800 px-4 pb-4">
-                {result.sources.map((src, i) => (
-                  <li key={i} className="py-3 space-y-1">
-                    <a href={src.url} target="_blank" rel="noopener noreferrer"
-                      className="flex items-start gap-1.5 text-emerald-400 hover:text-emerald-300 text-sm font-medium leading-snug transition">
-                      <ExternalLink className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                      {src.title}
-                    </a>
-                    <p className="text-xs text-slate-500 line-clamp-2">{src.snippet}</p>
-                    <p className="text-xs text-slate-600 truncate">{src.url}</p>
-                  </li>
-                ))}
+                {result.sources.map((src, i) => {
+                  const href = safeHref(src.url);
+                  return (
+                    <li key={i} className="py-3 space-y-1">
+                      {href ? (
+                        <a href={href} target="_blank" rel="noopener noreferrer"
+                          className="flex items-start gap-1.5 text-emerald-400 hover:text-emerald-300 text-sm font-medium leading-snug transition">
+                          <ExternalLink className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          {src.title}
+                        </a>
+                      ) : (
+                        <span className="flex items-start gap-1.5 text-slate-300 text-sm font-medium leading-snug">
+                          <ExternalLink className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                          {src.title}
+                        </span>
+                      )}
+                      <p className="text-xs text-slate-500 line-clamp-2">{src.snippet}</p>
+                      <p className="text-xs text-slate-600 truncate">{src.url}</p>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </section>

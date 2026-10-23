@@ -30,7 +30,8 @@ async function fetchHolidaysForYear(countryCode: string, year: number): Promise<
     const result = await cached<NagerHoliday[]>(key, 7 * 86_400, async () => {
         try {
             const res = await fetch(
-                `https://date.nager.at/api/v3/PublicHolidays/${year}/${countryCode.toUpperCase()}`
+                `https://date.nager.at/api/v3/PublicHolidays/${year}/${countryCode.toUpperCase()}`,
+                { signal: AbortSignal.timeout(8_000) }
             );
             if (!res.ok) return null;
             const data = (await res.json()) as NagerHoliday[];

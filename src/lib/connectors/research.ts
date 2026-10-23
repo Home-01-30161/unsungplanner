@@ -1,5 +1,6 @@
 import { tavily } from "@tavily/core";
 import { cached } from "../cache";
+import { isHttpUrl } from "../security";
 
 export interface ResearchSource {
     title: string;
@@ -44,11 +45,16 @@ export async function researchDestination(city: string, country: string): Promis
 
             if (!allResults.length) return null;
 
-            const sources: ResearchSource[] = allResults.map((r) => ({
-                title: r.title,
-                url: r.url,
-                snippet: r.content.slice(0, 280),
-            }));
+            // Only keep absolute http(s) links — these are rendered as anchors in the UI.
+            const sources: ResearchSource[] = allResults
+                .filter((r) => isHttpUrl(r.url))
+                .map((r) => ({
+                    title: r.title,
+                    url: r.url,
+                    snippet: r.content.slice(0, 280),
+                }));
+
+            if (!sources.length) return null;
 
             const notes = allResults
                 .map((r) => `[${r.tag.toUpperCase()}] ${r.title}: ${r.content.slice(0, 300)}`)

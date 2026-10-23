@@ -1,5 +1,7 @@
 import { NextRequest } from "next/server";
 import { searchCitiesLocal } from "@/lib/connectors/citySearch";
+import { consumeSlotLocal } from "@/lib/cache";
+import { clientIp } from "@/lib/security";
 
 type GeoResult = {
     name: string;
@@ -14,16 +16,33 @@ type GeoResult = {
     feature_code?: string;
 };
 
+const MAX_QUERY_LENGTH = 60;
+const SEARCHES_PER_MINUTE = 120;
+
+// Typeahead results are public and stable; let the CDN absorb repeat queries.
+const CACHE_HEADERS = { "Cache-Control": "public, s-maxage=86400, stale-while-revalidate=604800" };
+
 export async function GET(req: NextRequest) {
     const city    = req.nextUrl.searchParams.get("city")?.trim()    ?? "";
     const country = req.nextUrl.searchParams.get("country")?.trim() ?? "";
 
     if (city.length < 2) return Response.json([]);
+    if (city.length > MAX_QUERY_LENGTH || country.length > MAX_QUERY_LENGTH) {
+        return Response.json({ error: "Query too long." }, { status: 400 });
+    }
+
+    const minuteBucket = Math.floor(Date.now() / 60_000);
+    if (!consumeSlotLocal(`rl:cities:${clientIp(req)}:${minuteBucket}`, SEARCHES_PER_MINUTE, 120)) {
+        return Response.json(
+            { error: "Too many requests." },
+            { status: 429, headers: { "Retry-After": "60" } }
+        );
+    }
 
     // 1. Primary: Curated SimpleMaps dataset (50,248 verified cities, instant <1ms, zero noise)
     const localResults = searchCitiesLocal(city, country, 6);
     if (localResults.length > 0) {
-        return Response.json(localResults);
+        return Response.json(localResults, { headers: CACHE_HEADERS });
     }
 
     // 2. Fallback: Open-Meteo (for tiny villages not in the top 50,000 cities)
@@ -32,7 +51,7 @@ export async function GET(req: NextRequest) {
             `https://geocoding-api.open-meteo.com/v1/search` +
             `?name=${encodeURIComponent(city)}&count=10&language=en&format=json`;
         const r = await fetch(url, { signal: AbortSignal.timeout(4_000) });
-        if (!r.ok) return Response.json([]);
+        if (!r.ok) return Response.json([], { headers: CACHE_HEADERS });
         const data = (await r.json()) as { results?: GeoResult[] };
 
         const q = country.toLowerCase();
@@ -55,8 +74,8 @@ export async function GET(req: NextRequest) {
                 label: [r.name, r.admin1, r.country].filter(Boolean).join(", "),
             }));
 
-        return Response.json(results);
+        return Response.json(results, { headers: CACHE_HEADERS });
     } catch {
-        return Response.json([]);
+        return Response.json([], { headers: CACHE_HEADERS });
     }
 }

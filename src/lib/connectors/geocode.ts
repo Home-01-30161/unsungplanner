@@ -3,7 +3,7 @@ import { searchCitiesLocal } from "./citySearch";
 // Pre-built dataset from OurAirports (large + medium airports with scheduled service).
 // Generated via scripts/fetch-airports.mjs — 3,244 airports worldwide, no API key needed.
 // Format: [iata, lat, lng][]
-import airportsRaw from "../../data/airports.json";
+import airportsRaw from "../../data/airports.js";
 
 export interface CityInfo {
     name: string;

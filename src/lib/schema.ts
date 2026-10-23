@@ -4,15 +4,18 @@ import { todayUTC } from "./dates";
 
 const cityField = z.string().min(1, "Required").max(100).transform((s) => s.trim());
 
-/** Pinned coordinates from the disambiguation picker. When present, geocoding is skipped. */
+/**
+ * Pinned coordinates from the disambiguation picker. When present, geocoding is skipped.
+ * Every field is bounded: this data reaches cache keys, third-party queries and the LLM prompt.
+ */
 const pinnedCity = z.object({
-    name:        z.string(),
-    admin1:      z.string().nullable().optional(),
-    country:     z.string(),
+    name:        z.string().min(1).max(100),
+    admin1:      z.string().max(100).nullable().optional(),
+    country:     z.string().min(1).max(100),
     countryCode: z.string().length(2),
-    lat:         z.number(),
-    lng:         z.number(),
-    timezone:    z.string(),
+    lat:         z.number().min(-90).max(90),
+    lng:         z.number().min(-180).max(180),
+    timezone:    z.string().max(64),
 }).optional();
 
 export const PlanRequest = z.object({

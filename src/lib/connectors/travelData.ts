@@ -4,6 +4,12 @@ import type { BudgetStyle, FlightQuote, HotelQuote } from "../types";
 
 const SERP = "https://serpapi.com/search.json";
 
+/** Every outbound call gets a hard timeout so one slow upstream can't eat the 60s budget. */
+const FETCH_TIMEOUT_MS = 8_000;
+
+/** Each airport code is another billable SerpAPI search. */
+const MAX_AIRPORTS_PER_SIDE = 2;
+
 type FlightLeg = {
     price?: number;
     flights?: {
@@ -64,7 +70,7 @@ async function fetchFlightPrice(
             hl: "en",
             api_key: apiKey,
         });
-        const res = await fetch(`${SERP}?${params}`);
+        const res = await fetch(`${SERP}?${params}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
         if (!res.ok) return null;
         const data = (await res.json()) as SerpFlightResponse;
         if (data.error) return null;
@@ -106,11 +112,14 @@ async function fetchFlightPrice(
 /**
  * Cheapest round-trip fare for 1 adult.
  *
- * Strategy:
- *  1. Combined multi-airport search first (e.g. "BKK,DMK" → "KIX,ITM") — this is
- *     how Google Flights itself finds the globally cheapest option across all airports.
- *  2. Fall back to individual pairs if the combined search yields nothing.
- *  3. If nothing on the exact date, retry ±1…±3 days.
+ * Cost guard: every search is a billable SerpAPI call on a small free tier, so
+ * the shape below is deliberately frugal:
+ *  1. Exact dates: one combined multi-airport search + the individual pairs shot
+ *     in parallel (max 5 calls for 2×2 airports), cheapest of them wins.
+ *  2. Exact dates yielded nothing → retry ±1 day, combined search only (1 call each).
+ *  3. Airports are capped at 2 per side; each extra code is another paid search.
+ *
+ * Worst case is 7 calls per plan instead of the previous ~119.
  */
 export async function searchFlights(
     fromAirports: string[],
@@ -122,30 +131,39 @@ export async function searchFlights(
     const apiKey = process.env.SERPAPI_KEY;
     if (!apiKey || !fromAirports.length || !toAirports.length) return null;
 
-    const combinedDep = fromAirports.join(",");
-    const combinedArr = toAirports.join(",");
+    const from = fromAirports.slice(0, MAX_AIRPORTS_PER_SIDE);
+    const to = toAirports.slice(0, MAX_AIRPORTS_PER_SIDE);
+
+    const combinedDep = from.join(",");
+    const combinedArr = to.join(",");
 
     const individualPairs: [string, string][] = [];
-    for (const dep of fromAirports) for (const arr of toAirports) individualPairs.push([dep, arr]);
+    for (const dep of from) for (const arr of to) individualPairs.push([dep, arr]);
 
-    const offsets = [0, 1, -1, 2, -2, 3, -3];
-    const cacheKey = `flights5:${combinedDep}:${combinedArr}:${outbound}:${inbound}:${adults}`;
+    const offsets = [0, 1, -1];
+    const cacheKey = `flights6:${combinedDep}:${combinedArr}:${outbound}:${inbound}:${adults}`;
 
-    return cached<FlightQuote>(cacheKey, 2 * 3600, async () => {
+    return cached<FlightQuote>(cacheKey, 4 * 3600, async () => {
         for (const offset of offsets) {
             const tryOut = offset === 0 ? outbound : addDays(outbound, offset);
             const tryRet = offset === 0 ? inbound  : addDays(inbound,  offset);
 
+            if (offset === 0) {
+                const [combined, ...individuals] = await Promise.all([
+                    fetchFlightPrice(combinedDep, combinedArr, tryOut, tryRet, apiKey, adults),
+                    ...individualPairs.map(([d, a]) => fetchFlightPrice(d, a, tryOut, tryRet, apiKey, adults))
+                ]);
+
+                const all = [combined, ...individuals].filter((r): r is NonNullable<typeof r> => r !== null);
+                if (!all.length) continue;
+
+                const cheapest = all.reduce((a, b) => (b.priceUSD < a.priceUSD ? b : a));
+                return { ...cheapest, actualOutbound: tryOut };
+            }
+
+            // Alternate dates: combined search only, so the cost stays bounded.
             const combined = await fetchFlightPrice(combinedDep, combinedArr, tryOut, tryRet, apiKey, adults);
-            const individuals = await Promise.all(
-                individualPairs.map(([d, a]) => fetchFlightPrice(d, a, tryOut, tryRet, apiKey, adults))
-            );
-
-            const all = [combined, ...individuals].filter((r): r is NonNullable<typeof r> => r !== null);
-            if (!all.length) continue;
-
-            const cheapest = all.reduce((a, b) => (b.priceUSD < a.priceUSD ? b : a));
-            return { ...cheapest, actualOutbound: tryOut };
+            if (combined) return { ...combined, actualOutbound: tryOut };
         }
         return null;
     });
@@ -181,7 +199,7 @@ export async function searchHotels(
     const query = `${city}, ${country}`;
     const classFilter = HOTEL_CLASS[style];
 
-    return cached<HotelQuote>(`hotels8:${query}:${checkIn}:${checkOut}:${style}:${adults}`, 2 * 3600, async () => {
+    return cached<HotelQuote>(`hotels8:${query}:${checkIn}:${checkOut}:${style}:${adults}`, 4 * 3600, async () => {
         try {
             const paramObj: Record<string, string> = {
                 engine: "google_hotels",
@@ -197,7 +215,7 @@ export async function searchHotels(
             if (classFilter) paramObj.hotel_class = classFilter;
 
             const params = new URLSearchParams(paramObj);
-            const res = await fetch(`${SERP}?${params}`);
+            const res = await fetch(`${SERP}?${params}`, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
             if (!res.ok) return null;
             const data = (await res.json()) as SerpHotelResponse;
             if (data.error) return null;
