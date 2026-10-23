@@ -5,9 +5,9 @@ import type { Budget, BudgetLine, BudgetStyle, CityInfo, DisplayCurrency, Flight
  * will note they are rough estimates and advise checking locally.
  */
 const DAILY_USD: Record<BudgetStyle, { food: number; localTransport: number; activities: number }> = {
-    Backpacker:  { food: 15,  localTransport: 5,  activities: 10  },
-    "Mid-range": { food: 40,  localTransport: 15, activities: 30  },
-    Luxury:      { food: 120, localTransport: 50, activities: 100 }
+    Backpacker: { food: 15, localTransport: 5, activities: 10 },
+    "Mid-range": { food: 40, localTransport: 15, activities: 30 },
+    Luxury: { food: 120, localTransport: 50, activities: 100 }
 };
 
 const CAR_RENTAL_PER_DAY_USD = 55; // rough global estimate
